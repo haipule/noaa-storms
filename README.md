@@ -33,7 +33,7 @@ Install via the Signal K Appstore when available.
 ```bash
 cd ~/.signalk
 npm install noaa-storms
-```
+````
 ---
 
 ## Activation
