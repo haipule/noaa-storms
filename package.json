@@ -1,0 +1,42 @@
+{
+  "name": "noaa-storms",
+  "version": "1.0.1",
+  "description": "NOAA storm monitor for Signal K",
+  "main": "index.js",
+  "author": "haipule",
+  "license": "MIT",
+  "homepage": "https://github.com/haipule/noaa-storms#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haipule/noaa-storms.git"
+  },
+  "bugs": {
+    "url": "https://github.com/haipule/noaa-storms/issues"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-webapp",
+    "signalk-category-weather",
+    "noaa",
+    "storm",
+    "hurricane",
+    "weather",
+    "marine"
+  ],
+  "signalk": {
+    "displayName": "NOAA Storms",
+    "icon": "public/NOAA_noText_logo.svg"
+  },
+  "files": [
+    "index.js",
+    "package.json",
+    "public"
+  ],
+  "scripts": {
+    "check": "node -c index.js",
+    "pack-test": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

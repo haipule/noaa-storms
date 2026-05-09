@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NOAA Storms</title>
+
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#111827; --panel-2:#1f2937;
+      --text:#e5e7eb; --muted:#9ca3af; --border:#374151;
+      --ok:#16a34a; --warn:#d97706; --alarm:#dc2626; --accent:#2563eb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+
+    h1, h2 { margin: 0 0 0.8rem; line-height: 1.2; }
+    h1 { font-size: 1.7rem; margin-bottom: 0.35rem; }
+
+    .version-line {
+      color: var(--muted);
+      font-size: 0.92rem;
+      margin-bottom: 1rem;
+    }
+
+    .refresh-row {
+      display: flex;
+      gap: 0.8rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    button {
+      padding: 0.55rem 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #334155;
+      color: white;
+      cursor: pointer;
+      font-size: 0.92rem;
+    }
+
+    button:hover { filter: brightness(1.1); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .small { color: var(--muted); font-size: 0.9rem; }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+    }
+
+    .top-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.45rem;
+    }
+
+    .kv div {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.8rem;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      padding-bottom: 0.35rem;
+    }
+
+    .kv div:last-child { border-bottom: none; padding-bottom: 0; }
+
+    .label { color: var(--muted); }
+    .value { text-align: right; font-weight: 600; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 82px;
+      padding: 0.3rem 0.7rem;
+      border-radius: 999px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+
+    .pill.ok {
+      background: rgba(22,163,74,0.15);
+      color: #86efac;
+      border-color: rgba(22,163,74,0.35);
+    }
+
+    .pill.warn {
+      background: rgba(217,119,6,0.15);
+      color: #fdba74;
+      border-color: rgba(217,119,6,0.35);
+    }
+
+    .pill.alarm {
+      background: rgba(220,38,38,0.15);
+      color: #fca5a5;
+      border-color: rgba(220,38,38,0.35);
+    }
+
+    .testdata-banner {
+      margin: 0 0 1rem;
+      padding: 0.9rem 1rem;
+      border-radius: 14px;
+      border: 2px solid var(--alarm);
+      background: rgba(220,38,38,0.22);
+      color: #fecaca;
+      font-weight: 800;
+      text-align: center;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+    }
+
+    .storms {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .storm-card {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.9rem;
+    }
+
+    .storm-card.ok { border-left: 6px solid var(--ok); }
+    .storm-card.warn { border-left: 6px solid var(--warn); }
+    .storm-card.alarm { border-left: 6px solid var(--alarm); }
+
+    .storm-name-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .storm-name { font-size: 1.1rem; font-weight: 700; }
+    .storm-category { color: var(--muted); font-size: 0.95rem; }
+
+    .storm-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.55rem 0.9rem;
+    }
+
+    .storm-item { min-width: 0; }
+    .storm-item .k { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.15rem; }
+    .storm-item .v { font-weight: 600; word-break: break-word; }
+
+    .empty { color: var(--muted); }
+
+    @media (max-width: 640px) {
+      .storm-grid { grid-template-columns: 1fr; }
+      .kv div { flex-direction: column; gap: 0.15rem; }
+      .value { text-align: left; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <h1>NOAA Storms</h1>
+    <div class="version-line" id="version-line">Version: loading...</div>
+
+    <div class="refresh-row">
+      <button id="refresh-btn" type="button">Refresh now</button>
+      <span class="small" id="refresh-status">Waiting for data...</span>
+    </div>
+
+    <div id="testdata-banner" class="testdata-banner" hidden>
+      ⚠ TESTDATEN AKTIV — Anzeige basiert nicht auf NOAA-Livedaten
+    </div>
+
+    <div class="top-grid">
+      <section class="card">
+        <h2>Status</h2>
+        <div class="kv">
+          <div><span class="label">Runtime state</span><span class="value" id="runtime-state">-</span></div>
+          <div><span class="label">Message</span><span class="value" id="runtime-message">-</span></div>
+          <div><span class="label">Data source</span><span class="value" id="data-source">-</span></div>
+          <div><span class="label">Last request</span><span class="value" id="last-request">-</span></div>
+          <div><span class="label">Next request</span><span class="value" id="next-request">-</span></div>
+          <div><span class="label">Poll interval</span><span class="value" id="runtime-interval">-</span></div>
+          <div><span class="label">Timer active</span><span class="value" id="runtime-timer">-</span></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Storm summary</h2>
+        <div class="kv">
+          <div><span class="label">Storm count</span><span class="value" id="storm-count">-</span></div>
+          <div><span class="label">Invalid count</span><span class="value" id="invalid-count">-</span></div>
+          <div><span class="label">Active</span><span class="value" id="active-label">-</span></div>
+          <div><span class="label">Time zone</span><span class="value" id="time-zone">-</span></div>
+          <div><span class="label">Boat position</span><span class="value" id="boat-position">-</span></div>
+          <div><span class="label">Boat source</span><span class="value" id="boat-source">-</span></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Configured thresholds</h2>
+      <div class="kv">
+        <div><span class="label">Poll normal</span><span class="value" id="cfg-pollNormalMin">-</span></div>
+        <div><span class="label">Poll warning</span><span class="value" id="cfg-pollWarningMin">-</span></div>
+        <div><span class="label">Poll alarm</span><span class="value" id="cfg-pollAlarmMin">-</span></div>
+        <div><span class="label">Warning threshold</span><span class="value" id="cfg-warnNm">-</span></div>
+        <div><span class="label">Alarm threshold</span><span class="value" id="cfg-alarmNm">-</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Storms</h2>
+      <div id="storms" class="storms">
+        <div class="empty">Loading...</div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const HTML_VERSION = "1.0.1";
+    const DATA_URL = "/noaa-storms/data";
+    const STATUS_URL = "/noaa-storms/status";
+    const REFRESH_MS = 30000;
+    const STATUS_REFRESH_MS = 60000;
+
+    let dataLoading = false;
+    let statusLoading = false;
+
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function esc(text) {
+      return String(text ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function cacheBust() {
+      return `${encodeURIComponent(HTML_VERSION)}-${Date.now()}`;
+    }
+
+    function stateClass(state) {
+      const s = String(state || "").toLowerCase();
+      if (s === "alarm") return "alarm";
+      if (s === "warning" || s === "warn") return "warn";
+      return "ok";
+    }
+
+    function categoryLabel(cat) {
+      const map = {
+        TD: "Tropical Depression",
+        TS: "Tropical Storm",
+        HU: "Hurricane",
+        MH: "Major Hurricane",
+        EX: "Extratropical",
+        SD: "Subtropical Depression",
+        SS: "Subtropical Storm"
+      };
+      return map[cat] || cat || "-";
+    }
+
+    function formatNumber(v, digits = 1) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n.toFixed(digits) : "-";
+    }
+
+    function formatBool(v) {
+      return v ? "yes" : "no";
+    }
+
+    function formatInterval(ms) {
+      const n = Number(ms);
+      if (!Number.isFinite(n)) return "-";
+
+      const min = n / 60000;
+      if (min >= 60 && Number.isInteger(min / 60)) {
+        return (min / 60) + " h";
+      }
+
+      return formatNumber(min, 0) + " min";
+    }
+
+    function formatIsoLocal(iso, timeZone) {
+      if (!iso) return "-";
+
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+
+      try {
+        return new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          timeZone: timeZone || undefined
+        }).format(d);
+      } catch {
+        return d.toLocaleString();
+      }
+    }
+
+    function degToCardinal(deg) {
+      const n = Number(deg);
+      if (!Number.isFinite(n)) return "-";
+
+      const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+      const idx = Math.round((((n % 360) + 360) % 360) / 22.5) % 16;
+      return dirs[idx];
+    }
+
+    function formatLatLon(lat, lon) {
+      const la = Number(lat);
+      const lo = Number(lon);
+
+      if (!Number.isFinite(la) || !Number.isFinite(lo)) return "-";
+
+      return formatCoord(la, true) + " " + formatCoord(lo, false);
+    }
+
+    function formatCoord(value, isLat) {
+      const abs = Math.abs(Number(value));
+      const deg = Math.floor(abs);
+      const min = (abs - deg) * 60;
+
+      const hemi = isLat
+        ? (value >= 0 ? "N" : "S")
+        : (value >= 0 ? "E" : "W");
+
+      const degWidth = isLat ? 2 : 3;
+      return `${String(deg).padStart(degWidth, "0")}° ${min.toFixed(4)}' ${hemi}`;
+    }
+
+    function stormDistanceClass(distanceNm, cfg) {
+      const d = Number(distanceNm);
+      if (!Number.isFinite(d)) return "ok";
+
+      const warnNm = Number(cfg?.warnNm);
+      const alarmNm = Number(cfg?.alarmNm);
+
+      if (Number.isFinite(alarmNm) && d <= alarmNm) return "alarm";
+      if (Number.isFinite(warnNm) && d <= warnNm) return "warn";
+      return "ok";
+    }
+
+    function renderConfig(cfg = {}) {
+      byId("cfg-pollNormalMin").textContent = `${cfg.pollNormalMin ?? "-"} min`;
+      byId("cfg-pollWarningMin").textContent = `${cfg.pollWarningMin ?? "-"} min`;
+      byId("cfg-pollAlarmMin").textContent = `${cfg.pollAlarmMin ?? "-"} min`;
+      byId("cfg-warnNm").textContent = `${cfg.warnNm ?? "-"} nm`;
+      byId("cfg-alarmNm").textContent = `${cfg.alarmNm ?? "-"} nm`;
+    }
+
+    function renderTop(obj) {
+      const runtime = obj?.runtime || {};
+      const data = obj?.data || {};
+      const cfg = obj?.config || {};
+      const boat = data?.boat || null;
+      const tz = data?.timeZone === false ? false : (data?.timeZone ?? cfg.timeZone ?? false);
+      const state = runtime.state || "-";
+      byId("runtime-state").innerHTML =
+        `<span class="pill ${stateClass(state)}">${esc(state)}</span>`;
+
+const mode = runtime.dataMode || "-";
+
+let sourceText = "-";
+
+if (mode === "test") {
+  sourceText = "test";
+} else {
+  sourceText =
+    cfg.noaaUrl ||
+    runtime.noaaUrl ||
+    "live";
+}
+
+byId("runtime-message").textContent = runtime.message || "-";
+
+if (mode === "test") {
+  byId("data-source").textContent = "test";
+} else {
+  const url = cfg.noaaUrl || runtime.noaaUrl || "";
+
+  if (url) {
+byId("data-source").innerHTML =
+  `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">NOAA CurrentStorms.json</a>`;
+
+  } else {
+    byId("data-source").textContent = "live";
+  }
+}
+
+
+byId("testdata-banner").hidden = mode !== "test";
+
+      byId("last-request").textContent = formatIsoLocal(runtime.lastRequest, tz);
+      byId("next-request").textContent = formatIsoLocal(runtime.nextRequest, tz);
+      byId("runtime-interval").textContent = formatInterval(runtime.intervalMs);
+      byId("runtime-timer").textContent =
+        typeof runtime.timerActive === "boolean" ? formatBool(runtime.timerActive) : "-";
+
+      byId("storm-count").textContent = data.stormCount ?? 0;
+      byId("invalid-count").textContent = data.invalidCount ?? 0;
+      byId("active-label").textContent = data.activeLabel || "-";
+      byId("time-zone").textContent = tz === false ? "false" : tz;
+      byId("boat-position").textContent = boat ? formatLatLon(boat.lat, boat.lon) : "-";
+      byId("boat-source").textContent = boat?.source || "-";
+    }
+
+    function renderStorms(obj) {
+      const cfg = obj?.config || {};
+      const data = obj?.data || {};
+      const tz = data?.timeZone || cfg.timeZone || "America/St_Lucia";
+      const storms = Array.isArray(data.storms) ? data.storms : [];
+      const container = byId("storms");
+
+      if (!storms.length) {
+        container.innerHTML = `<div class="empty">No active storms</div>`;
+        return;
+      }
+
+      container.innerHTML = storms.map(storm => {
+        const cls = stormDistanceClass(storm.distanceNm, cfg);
+
+        const distance = Number.isFinite(Number(storm.distanceNm))
+          ? `${formatNumber(storm.distanceNm, 1)} nm`
+          : "-";
+
+        const bearing = Number.isFinite(Number(storm.bearingDeg))
+          ? `${Math.round(storm.bearingDeg)}° ${degToCardinal(storm.bearingDeg)}`
+          : "-";
+
+        const movementDir = Number.isFinite(Number(storm.movementDir))
+          ? `${Math.round(storm.movementDir)}° ${degToCardinal(storm.movementDir)}`
+          : "-";
+
+        const movementSpeed = Number.isFinite(Number(storm.movementSpeed))
+          ? `${formatNumber(storm.movementSpeed, 0)} kn`
+          : "-";
+
+        const intensity = Number.isFinite(Number(storm.intensity))
+          ? `${formatNumber(storm.intensity, 0)} kn`
+          : "-";
+
+        return `
+          <article class="storm-card ${cls}">
+            <div class="storm-name-row">
+              <div>
+                <div class="storm-name">${esc(storm.name || "unknown")}</div>
+                <div class="storm-category">${esc(categoryLabel(storm.category))}</div>
+              </div>
+              <span class="pill ${cls}">${esc(distance)}</span>
+            </div>
+
+            <div class="storm-grid">
+              <div class="storm-item">
+                <div class="k">Position</div>
+                <div class="v">${esc(formatLatLon(storm.stormLat, storm.stormLon))}</div>
+              </div>
+
+              <div class="storm-item">
+                <div class="k">Bearing</div>
+                <div class="v">${esc(bearing)}</div>
+              </div>
+
+              <div class="storm-item">
+                <div class="k">Intensity</div>
+                <div class="v">${esc(intensity)}</div>
+              </div>
+
+              <div class="storm-item">
+                <div class="k">Movement</div>
+                <div class="v">${esc(movementDir)} @ ${esc(movementSpeed)}</div>
+              </div>
+
+              <div class="storm-item">
+                <div class="k">Last update</div>
+                <div class="v">${esc(formatIsoLocal(storm.lastUpdate, tz))}</div>
+              </div>
+
+              <div class="storm-item">
+                <div class="k">Boat distance source</div>
+                <div class="v">${storm.boatLat != null && storm.boatLon != null ? "computed" : "-"}</div>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    async function loadStatus() {
+      if (statusLoading) return;
+      statusLoading = true;
+
+      try {
+        const res = await fetch(`${STATUS_URL}?v=${cacheBust()}`, {
+          cache: "no-store",
+          credentials: "same-origin"
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const info = await res.json();
+
+        byId("version-line").textContent =
+          `HTML ${HTML_VERSION} | Plugin ${info.pluginVersion || "?"}`;
+
+        if (info.config) renderConfig(info.config);
+      } catch (err) {
+        byId("version-line").textContent =
+          `HTML ${HTML_VERSION} | Plugin status load failed: ${err.message}`;
+      } finally {
+        statusLoading = false;
+      }
+    }
+
+    async function loadData() {
+      if (dataLoading) return;
+
+      dataLoading = true;
+      byId("refresh-btn").disabled = true;
+      byId("refresh-status").textContent = "Refreshing...";
+
+      try {
+        const res = await fetch(`${DATA_URL}?v=${cacheBust()}`, {
+          cache: "no-store",
+          credentials: "include"
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const obj = await res.json();
+
+        renderTop(obj);
+        renderStorms(obj);
+
+        if (obj.config) renderConfig(obj.config);
+
+        byId("refresh-status").textContent =
+          `Last refresh: ${new Date().toLocaleTimeString()}`;
+      } catch (err) {
+        byId("storms").innerHTML =
+          `<div class="empty">Load failed: ${esc(err.message)}</div>`;
+        byId("refresh-status").textContent = `Load failed: ${err.message}`;
+      } finally {
+        dataLoading = false;
+        byId("refresh-btn").disabled = false;
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      byId("refresh-btn").addEventListener("click", () => {
+        loadStatus();
+        loadData();
+      });
+
+      loadStatus();
+      loadData();
+
+      setInterval(loadData, REFRESH_MS);
+      setInterval(loadStatus, STATUS_REFRESH_MS);
+    });
+  </script>
+</body>
+</html>
