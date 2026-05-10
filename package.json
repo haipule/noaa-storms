@@ -27,11 +27,15 @@
     "displayName": "NOAA Storms",
     "icon": "public/NOAA_noText_logo.svg"
   },
+
   "files": [
-    "index.js",
-    "package.json",
-    "public"
+  "index.js",
+  "package.json",
+  "README.md",
+  "LICENSE",
+  "public"
   ],
+  
   "scripts": {
     "check": "node -c index.js",
     "pack-test": "npm pack --dry-run"
