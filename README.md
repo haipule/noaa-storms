@@ -16,7 +16,7 @@ NOAA Storm Monitor Plugin + WebApp for Signal K
   - Warning
   - Alarm
 - Supports live and test data mode
-- Responsive dark-mode Web UI
+- Responsive dark-themed Web UI
 - Reads vessel position from Signal K
 - Combined Signal K plugin + WebApp
 
