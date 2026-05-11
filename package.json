@@ -25,9 +25,11 @@
   ],
   "signalk": {
     "displayName": "NOAA Storms",
+    "type": "webapp",
     "icon": "public/NOAA_noText_logo.svg"
   },
-
+"dependencies":{
+},
   "files": [
   "index.js",
   "package.json",

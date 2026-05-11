@@ -32,3 +32,9 @@ cache/
 
 # Optional test/dev files
 public/index.bak
+
+#npm token
+.npmrc
+ 
+# deploy
+deploy-to-pi.sh
