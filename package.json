@@ -1,6 +1,6 @@
 {
   "name": "noaa-storms",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "NOAA storm monitor for Signal K",
   "main": "index.js",
   "author": "haipule",
@@ -28,16 +28,14 @@
     "type": "webapp",
     "icon": "public/NOAA_noText_logo.svg"
   },
-"dependencies":{
-},
+  "dependencies": {},
   "files": [
-  "index.js",
-  "package.json",
-  "README.md",
-  "LICENSE",
-  "public"
+    "index.js",
+    "package.json",
+    "README.md",
+    "LICENSE",
+    "public"
   ],
-  
   "scripts": {
     "check": "node -c index.js",
     "pack-test": "npm pack --dry-run"
