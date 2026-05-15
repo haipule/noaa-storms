@@ -757,7 +757,7 @@ function normalizeBoatPosition(raw) {
       scheduleNext(obj);
 
       app.setPluginStatus(`${runtime.dataMode} | ${runtime.state} | ${runtime.message}`);
-      app.setPluginError("");
+      //app.setPluginError("");
     } catch (err) {
       const msg = err?.message || String(err);
       const obj = latest || buildEmptyObject(cfg);
