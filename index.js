@@ -6,7 +6,9 @@ const PLUGIN_VERSION = packageJson.version;
   const PLUGIN_ID = "noaa-storms";
   const DEFAULT_NOAA_URL = "https://www.nhc.noaa.gov/CurrentStorms.json";
   const POSITION_RETRY_MS = 30 * 1000;
+  const MAX_RELIABLE_POSITION_AGE_MS = 5 * 60 * 1000;
   const MAX_BOAT_POSITION_AGE_MS = 30 * 60 * 1000;
+  const MIN_RELIABLE_LIVE_DISTANCE_NM = 0.1;
 
   let timer = null;
   let stopped = false;
@@ -240,6 +242,7 @@ function extractSource(delta, upd, valueObj) {
               lat: Number(v.value.latitude),
               lon: Number(v.value.longitude),
               ts: upd.timestamp ? new Date(upd.timestamp).getTime() : Date.now(),
+              hasTimestamp: true,
               source: String(extractSource(delta, upd, v.value))
             };
           });
@@ -298,11 +301,13 @@ function normalizeBoatPosition(raw) {
     return false;
   }
 
-  const ts = raw.timestamp
+  const timestampMs = raw.timestamp
     ? new Date(raw.timestamp).getTime()
-    : (Number.isFinite(Number(raw.ts)) ? Number(raw.ts) : Date.now());
+    : (Number.isFinite(Number(raw.ts)) ? Number(raw.ts) : null);
+  const hasTimestamp = Number.isFinite(timestampMs) || raw.hasTimestamp === true;
+  const ts = Number.isFinite(timestampMs) ? timestampMs : Date.now();
 
-  if (Number.isFinite(ts) && Date.now() - ts > MAX_BOAT_POSITION_AGE_MS) {
+  if (hasTimestamp && Number.isFinite(ts) && Date.now() - ts > MAX_BOAT_POSITION_AGE_MS) {
     return false;
   }
 
@@ -317,6 +322,7 @@ function normalizeBoatPosition(raw) {
     lat,
     lon,
     ts: Number.isFinite(ts) ? ts : Date.now(),
+    hasTimestamp,
     source
   };
 }
@@ -352,7 +358,63 @@ function normalizeBoatPosition(raw) {
       lat: 12.05,
       lon: -61.75,
       ts: Date.now(),
+      hasTimestamp: true,
       source: "test-fallback"
+    };
+  }
+
+  function positionAgeMs(boat) {
+    if (!Number.isFinite(Number(boat?.ts))) return null;
+    return Math.max(0, Date.now() - Number(boat.ts));
+  }
+
+  function checkBoatPositionReadyForDistance(boat, liveMode) {
+    if (!boat) {
+      return {
+        ok: false,
+        reason: "boat position missing",
+        ageMs: null
+      };
+    }
+
+    const ageMs = positionAgeMs(boat);
+
+    if (!liveMode) {
+      return {
+        ok: true,
+        reason: null,
+        ageMs
+      };
+    }
+
+    if (boat.hasTimestamp !== true) {
+      return {
+        ok: false,
+        reason: "boat position timestamp missing",
+        ageMs
+      };
+    }
+
+    if (!Number.isFinite(ageMs)) {
+      return {
+        ok: false,
+        reason: "boat position age unknown",
+        ageMs: null
+      };
+    }
+
+    if (ageMs > MAX_RELIABLE_POSITION_AGE_MS) {
+      return {
+        ok: false,
+        reason: `boat position stale (${Math.round(ageMs / 60000)} min old)`,
+        ageMs
+      };
+    }
+
+    return {
+      ok: true,
+      reason: null,
+      ageMs
     };
   }
 
@@ -535,8 +597,10 @@ function normalizeBoatPosition(raw) {
     };
   }
 
-  function enrichStorms(data, boat) {
+  function enrichStorms(data, boat, cfg) {
     const storms = Array.isArray(data?.storms) ? data.storms : [];
+    const liveMode = cfg?.dataMode !== "test";
+    const positionReady = checkBoatPositionReadyForDistance(boat, liveMode);
 
     const enriched = storms.map((s) => {
       const out = {
@@ -546,10 +610,13 @@ function normalizeBoatPosition(raw) {
         distanceNm: null,
         distanceM: null,
         bearingDeg: null,
-        bearingRad: null
+        bearingRad: null,
+        distanceReliable: false,
+        distanceBlockedReason: positionReady.reason,
+        boatPositionAgeMs: positionReady.ageMs
       };
 
-      if (boat && Number.isFinite(Number(out.stormLat)) && Number.isFinite(Number(out.stormLon))) {
+      if (positionReady.ok && Number.isFinite(Number(out.stormLat)) && Number.isFinite(Number(out.stormLon))) {
         const calc = calcDistanceAndBearing(
           boat.lat,
           boat.lon,
@@ -557,10 +624,23 @@ function normalizeBoatPosition(raw) {
           Number(out.stormLon)
         );
 
-        out.distanceNm = calc.distanceNm;
-        out.distanceM = calc.distanceM;
-        out.bearingDeg = calc.bearingDeg;
-        out.bearingRad = calc.bearingRad;
+        const tooCloseToBeReliable =
+          liveMode && calc.distanceNm < MIN_RELIABLE_LIVE_DISTANCE_NM;
+
+        if (tooCloseToBeReliable) {
+          out.distanceBlockedReason = "calculated distance is suspiciously close to zero";
+          debug(
+            `NOAA: blocked suspicious zero distance for ${out.name || "storm"} ` +
+            `(boat ${boat.lat},${boat.lon}; storm ${out.stormLat},${out.stormLon})`
+          );
+        } else {
+          out.distanceNm = calc.distanceNm;
+          out.distanceM = calc.distanceM;
+          out.bearingDeg = calc.bearingDeg;
+          out.bearingRad = calc.bearingRad;
+          out.distanceReliable = true;
+          out.distanceBlockedReason = null;
+        }
       }
 
       return out;
@@ -575,7 +655,7 @@ function normalizeBoatPosition(raw) {
     return enriched;
   }
 
-  function buildRuntime(storms, cfg, prevRuntime) {
+  function buildRuntimeState(storms, cfg) {
     let state = "normal";
     let message = "No active storm";
     const nearest = storms.length ? storms[0] : null;
@@ -583,26 +663,65 @@ function normalizeBoatPosition(raw) {
     if (nearest) {
       const dist = Number(nearest.distanceNm);
 
-      if (Number.isFinite(dist)) {
+      if (isReliableDistance(nearest)) {
         if (dist <= cfg.alarmNm) state = "alarm";
         else if (dist <= cfg.warnNm) state = "warning";
 
         message = `${nearest.name || "Storm"} ${nearest.category || ""} in ${dist.toFixed(1)} nm`;
       } else {
         state = "position_pending";
-        message = "Storm present, waiting for valid boat position";
+        message = nearest.distanceBlockedReason
+          ? `Storm present, distance pending: ${nearest.distanceBlockedReason}`
+          : "Storm present, waiting for valid boat position";
       }
     }
 
+    return { state, message };
+  }
+
+  function buildRuntime(storms, cfg, prevRuntime) {
+    const runtimeState = buildRuntimeState(storms, cfg);
+
     return {
-      state,
-      message,
+      ...runtimeState,
       dataMode: cfg.dataMode,
       lastRequest: new Date().toISOString(),
       nextRequest: prevRuntime?.nextRequest || null,
       intervalMs: prevRuntime?.intervalMs || null,
       timerActive: prevRuntime?.timerActive || false
     };
+  }
+
+  function buildDataResponseObject(cfg) {
+    const base = latest || buildEmptyObject(cfg);
+    const realBoat = getBoatPosition() || false;
+    const boat = cfg.dataMode === "test" && realBoat === false
+      ? getFallbackBoatPositionForTest()
+      : realBoat;
+    const storms = enrichStorms(base.data || {}, boat, cfg);
+    const runtimeState = buildRuntimeState(storms, cfg);
+
+    return {
+      ...base,
+      config: cfg,
+      runtime: {
+        ...(base.runtime || {}),
+        ...runtimeState,
+        dataMode: cfg.dataMode
+      },
+      data: {
+        ...(base.data || {}),
+        boat,
+        timeZone: resolveTimeZone(cfg),
+        stormCount: storms.length,
+        invalidCount: Array.isArray(base.data?.invalid) ? base.data.invalid.length : 0,
+        storms
+      }
+    };
+  }
+
+  function isReliableDistance(storm) {
+    return storm?.distanceReliable === true && Number.isFinite(Number(storm.distanceNm));
   }
 
   function nextIntervalMs(state, cfg) {
@@ -643,10 +762,12 @@ function normalizeBoatPosition(raw) {
       const s = storms[0];
       const dist = Number(s.distanceNm);
 
-      if (!Number.isFinite(dist)) {
+      if (!isReliableDistance(s)) {
         notif = {
           state: "normal",
-          message: "Storm present, waiting for valid boat position",
+          message: s.distanceBlockedReason
+            ? `Storm present, distance pending: ${s.distanceBlockedReason}`
+            : "Storm present, waiting for valid boat position",
           method: ["visual"]
         };
       } else {
@@ -769,7 +890,7 @@ function normalizeBoatPosition(raw) {
         normalizedData = normalizeStorms(raw, cfg);
       }
 
-      const storms = enrichStorms(normalizedData, boat);
+      const storms = enrichStorms(normalizedData, boat, cfg);
       const runtime = buildRuntime(storms, cfg, latest?.runtime);
 
       const obj = {
@@ -860,17 +981,7 @@ app.get("/noaa-storms/data", (req, res) => {
   setNoStoreHeaders(res);
 
   const cfg = getConfig();
-  const obj = latest || buildEmptyObject(cfg);
-  const boat = getBoatPosition();
-
-  obj.config = cfg;
-  obj.data = {
-    ...(obj.data || {}),
-    boat: boat || false,
-    timeZone: resolveTimeZone(cfg)
-  };
-
-  res.json(obj);
+  res.json(buildDataResponseObject(cfg));
 });
 
     app.get("/plugins/noaa-storms/status", (req, res) => {
@@ -888,18 +999,7 @@ app.get("/plugins/noaa-storms/data", (req, res) => {
   setNoStoreHeaders(res);
 
   const cfg = getConfig();
-  const obj = latest || buildEmptyObject(cfg);
-
-  const boat = getBoatPosition();
-
-  obj.config = cfg;
-  obj.data = {
-    ...(obj.data || {}),
-    boat: boat || false,
-    timeZone: resolveTimeZone(cfg)
-  };
-
-  res.json(obj);
+  res.json(buildDataResponseObject(cfg));
 });
 }
 

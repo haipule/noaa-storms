@@ -89,6 +89,31 @@
 
     .label { color: var(--muted); }
     .value { text-align: right; font-weight: 600; }
+    .tone-ok { color: #86efac; }
+    .tone-warn { color: #fdba74; }
+    .tone-alarm { color: #fca5a5; }
+
+    .status-value {
+      display: inline-flex;
+      justify-content: flex-end;
+      max-width: 100%;
+      padding: 0.18rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      word-break: break-word;
+    }
+
+    .status-value.ok {
+      background: rgba(22,163,74,0.15);
+      color: #86efac;
+      border-color: rgba(22,163,74,0.35);
+    }
+
+    .status-value.bad {
+      background: rgba(220,38,38,0.15);
+      color: #fca5a5;
+      border-color: rgba(220,38,38,0.35);
+    }
 
     .pill {
       display: inline-flex;
@@ -145,9 +170,20 @@
       padding: 0.9rem;
     }
 
-    .storm-card.ok { border-left: 6px solid var(--ok); }
-    .storm-card.warn { border-left: 6px solid var(--warn); }
-    .storm-card.alarm { border-left: 6px solid var(--alarm); }
+    .storm-card.ok {
+      border-left: 6px solid var(--ok);
+      background: linear-gradient(90deg, rgba(22,163,74,0.16), var(--panel-2) 38%);
+    }
+
+    .storm-card.warn {
+      border-left: 6px solid var(--warn);
+      background: linear-gradient(90deg, rgba(217,119,6,0.18), var(--panel-2) 38%);
+    }
+
+    .storm-card.alarm {
+      border-left: 6px solid var(--alarm);
+      background: linear-gradient(90deg, rgba(220,38,38,0.2), var(--panel-2) 38%);
+    }
 
     .storm-name-row {
       display: flex;
@@ -164,6 +200,21 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 0.55rem 0.9rem;
+    }
+
+    .storm-section {
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 0.75rem;
+      margin-top: 0.75rem;
+    }
+
+    .storm-section-title {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.55rem;
+      text-transform: uppercase;
     }
 
     .storm-item { min-width: 0; }
@@ -241,7 +292,7 @@
   </div>
 
   <script>
-    const HTML_VERSION = "1.0.1";
+    const HTML_VERSION = "1.0.5";
     const DATA_URL = "/noaa-storms/data";
     const STATUS_URL = "/noaa-storms/status";
     const REFRESH_MS = 30000;
@@ -313,19 +364,38 @@
       const d = new Date(iso);
       if (Number.isNaN(d.getTime())) return String(iso);
 
+      const zoneLabel = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "local";
+
       try {
-        return new Intl.DateTimeFormat(undefined, {
+        const local = new Intl.DateTimeFormat(undefined, {
           year: "numeric",
           month: "2-digit",
           day: "2-digit",
           hour: "2-digit",
           minute: "2-digit",
           second: "2-digit",
-          timeZone: timeZone || undefined
+          timeZone: timeZone || undefined,
+          timeZoneName: "short"
         }).format(d);
+
+        return `${local} (${zoneLabel})`;
       } catch {
-        return d.toLocaleString();
+        return `${d.toLocaleString()} (${zoneLabel})`;
       }
+    }
+
+    function formatIsoUtc(iso) {
+      if (!iso) return "-";
+
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return String(iso);
+
+      return d.toISOString().replace(".000Z", "Z");
+    }
+
+    function formatIsoLocalAndUtc(iso, timeZone) {
+      if (!iso) return "-";
+      return `${formatIsoLocal(iso, timeZone)} | UTC ${formatIsoUtc(iso)}`;
     }
 
     function degToCardinal(deg) {
@@ -359,6 +429,21 @@
       return `${String(deg).padStart(degWidth, "0")}° ${min.toFixed(4)}' ${hemi}`;
     }
 
+    function isValidBoat(boat) {
+      const lat = Number(boat?.lat);
+      const lon = Number(boat?.lon);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+      if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return false;
+      if (Math.abs(lat) < 0.000001 && Math.abs(lon) < 0.000001) return false;
+
+      return true;
+    }
+
+    function statusHtml(text, ok) {
+      return `<span class="status-value ${ok ? "ok" : "bad"}">${esc(text || "-")}</span>`;
+    }
+
     function stormDistanceClass(distanceNm, cfg) {
       const d = Number(distanceNm);
       if (!Number.isFinite(d)) return "warn";
@@ -372,11 +457,17 @@
     }
 
     function renderConfig(cfg = {}) {
-      byId("cfg-pollNormalMin").textContent = `${cfg.pollNormalMin ?? "-"} min`;
-      byId("cfg-pollWarningMin").textContent = `${cfg.pollWarningMin ?? "-"} min`;
-      byId("cfg-pollAlarmMin").textContent = `${cfg.pollAlarmMin ?? "-"} min`;
-      byId("cfg-warnNm").textContent = `${cfg.warnNm ?? "-"} nm`;
-      byId("cfg-alarmNm").textContent = `${cfg.alarmNm ?? "-"} nm`;
+      setConfigValue("cfg-pollNormalMin", `${cfg.pollNormalMin ?? "-"} min`, "tone-ok");
+      setConfigValue("cfg-pollWarningMin", `${cfg.pollWarningMin ?? "-"} min`, "tone-warn");
+      setConfigValue("cfg-pollAlarmMin", `${cfg.pollAlarmMin ?? "-"} min`, "tone-alarm");
+      setConfigValue("cfg-warnNm", `${cfg.warnNm ?? "-"} nm`, "tone-warn");
+      setConfigValue("cfg-alarmNm", `${cfg.alarmNm ?? "-"} nm`, "tone-alarm");
+    }
+
+    function setConfigValue(id, text, toneClass) {
+      const el = byId(id);
+      el.textContent = text;
+      el.className = `value ${toneClass}`;
     }
 
     function renderTop(obj) {
@@ -431,8 +522,17 @@ byId("testdata-banner").hidden = mode !== "test";
       byId("invalid-count").textContent = data.invalidCount ?? 0;
       byId("active-label").textContent = data.activeLabel || "-";
       byId("time-zone").textContent = tz === false ? "false" : tz;
-      byId("boat-position").textContent = boat ? formatLatLon(boat.lat, boat.lon) : "-";
-      byId("boat-source").textContent = boat?.source || "-";
+      const boatOk = isValidBoat(boat);
+      const sourceOk = boatOk && typeof boat?.source === "string" && boat.source.trim() !== "";
+
+      byId("boat-position").innerHTML = statusHtml(
+        boatOk ? formatLatLon(boat.lat, boat.lon) : "-",
+        boatOk
+      );
+      byId("boat-source").innerHTML = statusHtml(
+        sourceOk ? boat.source : "-",
+        sourceOk
+      );
     }
 
     function renderStorms(obj) {
@@ -448,9 +548,12 @@ byId("testdata-banner").hidden = mode !== "test";
       }
 
       container.innerHTML = storms.map(storm => {
-        const cls = stormDistanceClass(storm.distanceNm, cfg);
+        const distanceReliable = storm.distanceReliable === true;
+        const cls = distanceReliable
+          ? stormDistanceClass(storm.distanceNm, cfg)
+          : "warn";
 
-        const distance = Number.isFinite(Number(storm.distanceNm))
+        const distance = distanceReliable && Number.isFinite(Number(storm.distanceNm))
           ? `${formatNumber(storm.distanceNm, 1)} nm`
           : "-";
 
@@ -469,6 +572,13 @@ byId("testdata-banner").hidden = mode !== "test";
         const intensity = Number.isFinite(Number(storm.intensity))
           ? `${formatNumber(storm.intensity, 0)} kn`
           : "-";
+        const distanceStatusHtml = distanceReliable
+          ? ""
+          : `
+                <div class="storm-item">
+                  <div class="k">Distance status</div>
+                  <div class="v">${esc(storm.distanceBlockedReason || "-")}</div>
+                </div>`;
 
         return `
           <article class="storm-card ${cls}">
@@ -480,35 +590,45 @@ byId("testdata-banner").hidden = mode !== "test";
               <span class="pill ${cls}">${esc(distance)}</span>
             </div>
 
-            <div class="storm-grid">
-              <div class="storm-item">
-                <div class="k">Position</div>
-                <div class="v">${esc(formatLatLon(storm.stormLat, storm.stormLon))}</div>
-              </div>
+            <div class="storm-section">
+              <div class="storm-section-title">NOAA data</div>
+              <div class="storm-grid">
+                <div class="storm-item">
+                  <div class="k">Storm position</div>
+                  <div class="v">${esc(formatLatLon(storm.stormLat, storm.stormLon))}</div>
+                </div>
 
-              <div class="storm-item">
-                <div class="k">Bearing</div>
-                <div class="v">${esc(bearing)}</div>
-              </div>
+                <div class="storm-item">
+                  <div class="k">Intensity</div>
+                  <div class="v">${esc(intensity)}</div>
+                </div>
 
-              <div class="storm-item">
-                <div class="k">Intensity</div>
-                <div class="v">${esc(intensity)}</div>
-              </div>
+                <div class="storm-item">
+                  <div class="k">Movement</div>
+                  <div class="v">${esc(movementDir)} @ ${esc(movementSpeed)}</div>
+                </div>
 
-              <div class="storm-item">
-                <div class="k">Movement</div>
-                <div class="v">${esc(movementDir)} @ ${esc(movementSpeed)}</div>
+                <div class="storm-item">
+                  <div class="k">Last update</div>
+                  <div class="v">${esc(formatIsoLocalAndUtc(storm.lastUpdate, tz))}</div>
+                </div>
               </div>
+            </div>
 
-              <div class="storm-item">
-                <div class="k">Last update</div>
-                <div class="v">${esc(formatIsoLocal(storm.lastUpdate, tz))}</div>
-              </div>
+            <div class="storm-section">
+              <div class="storm-section-title">Calculated from vessel</div>
+              <div class="storm-grid">
+                <div class="storm-item">
+                  <div class="k">Distance</div>
+                  <div class="v">${esc(distance)}</div>
+                </div>
 
-              <div class="storm-item">
-                <div class="k">Boat distance source</div>
-                <div class="v">${storm.boatLat != null && storm.boatLon != null ? "computed" : "-"}</div>
+                <div class="storm-item">
+                  <div class="k">Bearing</div>
+                  <div class="v">${esc(bearing)}</div>
+                </div>
+
+${distanceStatusHtml}
               </div>
             </div>
           </article>
