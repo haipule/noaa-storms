@@ -269,7 +269,7 @@
     function stateClass(state) {
       const s = String(state || "").toLowerCase();
       if (s === "alarm") return "alarm";
-      if (s === "warning" || s === "warn") return "warn";
+      if (s === "warning" || s === "warn" || s === "position_pending") return "warn";
       return "ok";
     }
 
@@ -361,7 +361,7 @@
 
     function stormDistanceClass(distanceNm, cfg) {
       const d = Number(distanceNm);
-      if (!Number.isFinite(d)) return "ok";
+      if (!Number.isFinite(d)) return "warn";
 
       const warnNm = Number(cfg?.warnNm);
       const alarmNm = Number(cfg?.alarmNm);

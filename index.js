@@ -5,6 +5,8 @@ const packageJson = require("./package.json");
 const PLUGIN_VERSION = packageJson.version;
   const PLUGIN_ID = "noaa-storms";
   const DEFAULT_NOAA_URL = "https://www.nhc.noaa.gov/CurrentStorms.json";
+  const POSITION_RETRY_MS = 30 * 1000;
+  const MAX_BOAT_POSITION_AGE_MS = 30 * 60 * 1000;
 
   let timer = null;
   let stopped = false;
@@ -249,6 +251,10 @@ function extractSource(delta, upd, valueObj) {
 function getBoatPosition() {
   const candidates = [];
 
+  if (latestBoatPos) {
+    candidates.push(latestBoatPos);
+  }
+
   try {
     if (typeof app.getSelfPath === "function") {
       candidates.push(app.getSelfPath("navigation.position"));
@@ -285,10 +291,18 @@ function normalizeBoatPosition(raw) {
       ? raw.value
       : raw;
 
-  const lat = Number(value.latitude);
-  const lon = Number(value.longitude);
+  const lat = Number(value.latitude ?? value.lat);
+  const lon = Number(value.longitude ?? value.lon);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+  if (!isValidBoatPosition(lat, lon)) {
+    return false;
+  }
+
+  const ts = raw.timestamp
+    ? new Date(raw.timestamp).getTime()
+    : (Number.isFinite(Number(raw.ts)) ? Number(raw.ts) : Date.now());
+
+  if (Number.isFinite(ts) && Date.now() - ts > MAX_BOAT_POSITION_AGE_MS) {
     return false;
   }
 
@@ -302,10 +316,36 @@ function normalizeBoatPosition(raw) {
   return {
     lat,
     lon,
-    ts: raw.timestamp ? new Date(raw.timestamp).getTime() : Date.now(),
+    ts: Number.isFinite(ts) ? ts : Date.now(),
     source
   };
 }
+
+  function isValidLatLon(lat, lon) {
+    return (
+      Number.isFinite(lat) &&
+      Number.isFinite(lon) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180
+    );
+  }
+
+  function isNullIsland(lat, lon) {
+    return Math.abs(lat) < 0.000001 && Math.abs(lon) < 0.000001;
+  }
+
+  function isValidBoatPosition(lat, lon) {
+    if (!isValidLatLon(lat, lon)) return false;
+
+    // 0/0 is a common startup/default value. Treat it as "position not ready".
+    if (isNullIsland(lat, lon)) {
+      return false;
+    }
+
+    return true;
+  }
 
   function getFallbackBoatPositionForTest() {
     return {
@@ -405,10 +445,16 @@ function normalizeBoatPosition(raw) {
     const invalid = [];
 
     for (const s of activeStorms) {
-      const stormLat = toNumberOrNull(s.latitude_numeric) ?? parseCoord(s.latitude, "N");
-      const stormLon = toNumberOrNull(s.longitude_numeric) ?? parseCoord(s.longitude, "W");
+      const stormLat =
+        toNumberOrNull(s.latitudeNumeric) ??
+        toNumberOrNull(s.latitude_numeric) ??
+        parseCoord(s.latitude, "N");
+      const stormLon =
+        toNumberOrNull(s.longitudeNumeric) ??
+        toNumberOrNull(s.longitude_numeric) ??
+        parseCoord(s.longitude, "W");
 
-      if (!Number.isFinite(stormLat) || !Number.isFinite(stormLon)) {
+      if (!isValidLatLon(stormLat, stormLon) || isNullIsland(stormLat, stormLon)) {
         invalid.push({
           name: s.name || "unknown",
           error: "invalid coordinates"
@@ -543,8 +589,8 @@ function normalizeBoatPosition(raw) {
 
         message = `${nearest.name || "Storm"} ${nearest.category || ""} in ${dist.toFixed(1)} nm`;
       } else {
-        state = "warning";
-        message = "Storm present, but boat position missing";
+        state = "position_pending";
+        message = "Storm present, waiting for valid boat position";
       }
     }
 
@@ -560,6 +606,7 @@ function normalizeBoatPosition(raw) {
   }
 
   function nextIntervalMs(state, cfg) {
+    if (state === "position_pending") return POSITION_RETRY_MS;
     if (state === "alarm") return cfg.pollAlarmMin * 60 * 1000;
     if (state === "warning") return cfg.pollWarningMin * 60 * 1000;
     return cfg.pollNormalMin * 60 * 1000;
@@ -598,9 +645,9 @@ function normalizeBoatPosition(raw) {
 
       if (!Number.isFinite(dist)) {
         notif = {
-          state: "warn",
-          message: "Storm present, but boat position missing",
-          method: ["visual", "sound"]
+          state: "normal",
+          message: "Storm present, waiting for valid boat position",
+          method: ["visual"]
         };
       } else {
         let state = "normal";
