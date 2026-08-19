@@ -2,6 +2,7 @@ module.exports = function (app) {
   const plugin = {};
 
 const packageJson = require("./package.json");
+const { updateGpxFiles } = require("./gpx");
 const PLUGIN_VERSION = packageJson.version;
   const PLUGIN_ID = "noaa-storms";
   const DEFAULT_NOAA_URL = "https://www.nhc.noaa.gov/CurrentStorms.json";
@@ -44,6 +45,24 @@ const PLUGIN_VERSION = packageJson.version;
           title: "NOAA URL",
           default: DEFAULT_NOAA_URL
         },
+        recordGpx: {
+          type: "boolean",
+          title: "Record GPX files",
+          description: "Write an OpenCPN-compatible NOAA forecast track for each active storm.",
+          default: false
+        },
+        gpxOutputDirectory: {
+          type: "string",
+          title: "GPX output directory",
+          description: "Directory where NOAA Storms manages its current GPX files.",
+          default: ""
+        },
+        deleteInactiveGpx: {
+          type: "boolean",
+          title: "Delete GPX files when storms are no longer listed",
+          description: "Delete only files recorded in the NOAA Storms manifest after a successful live NOAA update.",
+          default: false
+        },
         pollNormalMin: {
           type: "number",
           title: "Poll normal (min)",
@@ -77,6 +96,9 @@ const PLUGIN_VERSION = packageJson.version;
     return {
       dataMode: "live",
       noaaUrl: DEFAULT_NOAA_URL,
+      recordGpx: false,
+      gpxOutputDirectory: "",
+      deleteInactiveGpx: false,
       pollNormalMin: 720,
       pollWarningMin: 60,
       pollAlarmMin: 15,
@@ -93,6 +115,11 @@ const PLUGIN_VERSION = packageJson.version;
       noaaUrl: typeof options?.noaaUrl === "string" && options.noaaUrl.trim()
         ? options.noaaUrl.trim()
         : d.noaaUrl,
+      recordGpx: options?.recordGpx === true,
+      gpxOutputDirectory: typeof options?.gpxOutputDirectory === "string"
+        ? options.gpxOutputDirectory.trim()
+        : "",
+      deleteInactiveGpx: options?.deleteInactiveGpx === true,
       pollNormalMin: Number(options?.pollNormalMin),
       pollWarningMin: Number(options?.pollWarningMin),
       pollAlarmMin: Number(options?.pollAlarmMin),
@@ -112,6 +139,14 @@ const PLUGIN_VERSION = packageJson.version;
     }
 
     return cfg;
+  }
+
+  function displayConfig(cfg) {
+    const { gpxOutputDirectory, ...display } = cfg;
+    return {
+      ...display,
+      gpxOutputDirectoryConfigured: Boolean(gpxOutputDirectory)
+    };
   }
 
   function getConfig() {
@@ -140,7 +175,7 @@ const PLUGIN_VERSION = packageJson.version;
         plugin: PLUGIN_VERSION,
         html: null
       },
-      config: cfg,
+      config: displayConfig(cfg),
       runtime: {
         state: "normal",
         message: "No active storm",
@@ -525,14 +560,19 @@ function normalizeBoatPosition(raw) {
       }
 
       storms.push({
+        id: toTextOrNull(s.id),
         name: s.name || "unknown",
         category: s.classification || s.category || "",
         stormLat,
         stormLon,
         intensity: toNumberOrNull(s.intensity),
+        pressure: toNumberOrNull(s.pressure),
         movementDir: toNumberOrNull(s.movementDir),
         movementSpeed: toNumberOrNull(s.movementSpeed),
-        lastUpdate: toTextOrNull(s.lastUpdate)
+        lastUpdate: toTextOrNull(s.lastUpdate),
+        advisoryNumber: toTextOrNull(s.forecastAdvisory?.advNum),
+        advisoryIssuance: toTextOrNull(s.forecastAdvisory?.issuance),
+        forecastAdvisoryUrl: toTextOrNull(s.forecastAdvisory?.url)
       });
     }
 
@@ -564,6 +604,7 @@ function normalizeBoatPosition(raw) {
       invalid: [],
       storms: [
         {
+          id: "test-hurricane",
           name: "TEST-HURRICANE",
           category: "HU",
           stormLat: hurricanePos.lat,
@@ -574,6 +615,7 @@ function normalizeBoatPosition(raw) {
           lastUpdate: now
         },
         {
+          id: "test-storm",
           name: "TEST-STORM",
           category: "TS",
           stormLat: stormPos.lat,
@@ -584,6 +626,7 @@ function normalizeBoatPosition(raw) {
           lastUpdate: now
         },
         {
+          id: "test-depression",
           name: "TEST-DEPRESSION",
           category: "TD",
           stormLat: depressionPos.lat,
@@ -703,7 +746,7 @@ function normalizeBoatPosition(raw) {
 
     return {
       ...base,
-      config: cfg,
+      config: displayConfig(cfg),
       runtime: {
         ...(base.runtime || {}),
         ...runtimeState,
@@ -869,6 +912,37 @@ function normalizeBoatPosition(raw) {
     return raw;
   }
 
+  async function addGpxStatus(storms, raw, cfg) {
+    const listedStormIds = Array.isArray(raw?.activeStorms)
+      ? raw.activeStorms.map((storm) => storm?.id).filter(Boolean)
+      : [];
+
+    try {
+      const statuses = await updateGpxFiles({
+        storms,
+        listedStormIds,
+        config: {
+          ...cfg,
+          userAgent: `${PLUGIN_ID}/${PLUGIN_VERSION}`
+        }
+      });
+      return storms.map((storm) => ({
+        ...storm,
+        gpx: statuses.get(storm.id) || {
+          state: "waiting",
+          message: "GPX status unavailable"
+        }
+      }));
+    } catch (error) {
+      const message = error?.message || String(error);
+      debug(`NOAA: GPX export failed: ${message}`);
+      return storms.map((storm) => ({
+        ...storm,
+        gpx: { state: "error", message }
+      }));
+    }
+  }
+
   async function runCycle(reason) {
     if (stopped) return;
 
@@ -882,15 +956,20 @@ function normalizeBoatPosition(raw) {
       app.setPluginStatus(`Polling ${cfg.dataMode} (${reason})`);
 
       let normalizedData;
+      let raw = null;
 
       if (cfg.dataMode === "test") {
         normalizedData = buildRelativeTestData(cfg, boat);
       } else {
-        const raw = await fetchNoaaJson(cfg);
+        raw = await fetchNoaaJson(cfg);
+        if (!Array.isArray(raw?.activeStorms)) {
+          throw new Error("NOAA response does not contain an activeStorms array");
+        }
         normalizedData = normalizeStorms(raw, cfg);
       }
 
-      const storms = enrichStorms(normalizedData, boat, cfg);
+      const enrichedStorms = enrichStorms(normalizedData, boat, cfg);
+      const storms = await addGpxStatus(enrichedStorms, raw, cfg);
       const runtime = buildRuntime(storms, cfg, latest?.runtime);
 
       const obj = {
@@ -898,7 +977,7 @@ function normalizeBoatPosition(raw) {
           plugin: PLUGIN_VERSION,
           html: null
         },
-        config: cfg,
+        config: displayConfig(cfg),
         runtime: {
           ...runtime,
           httpCache: cfg.dataMode === "live"
@@ -972,7 +1051,7 @@ app.get("/noaa-storms/status", (req, res) => {
     pluginId: plugin.id,
     pluginName: plugin.name,
     pluginVersion: plugin.version,
-    config: getConfig(),
+    config: displayConfig(getConfig()),
     runtime: latest?.runtime || null
   });
 });
@@ -990,7 +1069,7 @@ app.get("/noaa-storms/data", (req, res) => {
         pluginId: plugin.id,
         pluginName: plugin.name,
         pluginVersion: plugin.version,
-        config: getConfig(),
+        config: displayConfig(getConfig()),
         runtime: latest?.runtime || null
       });
     });

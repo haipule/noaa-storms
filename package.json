@@ -31,13 +31,15 @@
   "dependencies": {},
   "files": [
     "index.js",
+    "gpx.js",
     "package.json",
     "README.md",
     "LICENSE",
     "public"
   ],
   "scripts": {
-    "check": "node -c index.js",
+    "check": "node -c index.js && node -c gpx.js",
+    "test": "node --test",
     "pack-test": "npm pack --dry-run"
   },
   "engines": {

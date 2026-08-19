@@ -19,6 +19,8 @@ NOAA Storm Monitor Plugin + WebApp for Signal K
 - Responsive dark-themed Web UI
 - Reads vessel position from Signal K
 - Combined Signal K plugin + WebApp
+- Optional OpenCPN-compatible GPX forecast tracks
+- Safe cleanup of GPX files for storms no longer listed by NOAA
 
 ---
 
@@ -68,11 +70,48 @@ Default values:
 
 | Parameter | Default |
 |---|---|
-| Warning threshold | 400 nm |
-| Alarm threshold | 240 nm |
+| Warning threshold | 500 nm |
+| Alarm threshold | 250 nm |
 | Poll normal | 720 min |
 | Poll warning | 60 min |
 | Poll alarm | 15 min |
+| Record GPX files | disabled |
+| GPX output directory | empty |
+| Delete inactive storm GPX files | disabled |
+
+All settings are changed in the Signal K plugin configuration. The WebApp is
+display-only and links back to the plugin configuration when a GPX setting
+needs attention.
+
+## OpenCPN GPX export
+
+Enable **Record GPX files** and set **GPX output directory** to an absolute
+filesystem path to write one
+current file per active NOAA storm:
+
+```text
+noaa-storms-<storm-id>-current.gpx
+```
+
+Each GPX 1.1 file contains an official NOAA forecast track and informational
+waypoints for the current and forecast positions. Forecast waypoint details
+include the valid time, maximum wind, gusts, and advisory number. The current
+position also includes the available classification, pressure, and movement
+data. The GPX is an informational storm track, not a vessel route.
+
+Files are refreshed only when NOAA publishes a new forecast advisory. The
+WebApp shows whether each active storm's file was written, is current, is
+waiting for forecast data, was skipped by configuration, or failed to write.
+It displays the managed filename but not the configured filesystem path.
+
+When **Delete GPX files when storms are no longer listed** is enabled, cleanup
+runs only after a successful live NOAA response. The plugin records its files
+in `.noaa-storms-files.json` and never deletes other GPX files from the output
+directory. Test mode and failed NOAA requests do not trigger cleanup.
+
+OpenCPN does not automatically reload an imported GPX file when it changes.
+Files used as OpenCPN layers may require an OpenCPN restart before an update or
+deletion becomes visible.
 
 ---
 
