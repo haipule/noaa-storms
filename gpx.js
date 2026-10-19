@@ -115,6 +115,13 @@ function pointDescription(storm, point) {
   return lines.join("\n");
 }
 
+function startSymbol(storm) {
+  if (String(storm?.category || "").toUpperCase() !== "HU") return "circle";
+  return Number(storm?.stormLat) < 0
+    ? "Weather-Hurricane-SH"
+    : "Weather-Hurricane-NH";
+}
+
 function buildGpx(storm, forecastPoints) {
   const currentTime = validIso(storm.lastUpdate) || validIso(storm.advisoryIssuance);
   const advisoryTime = validIso(storm.advisoryIssuance) || currentTime;
@@ -139,10 +146,10 @@ function buildGpx(storm, forecastPoints) {
     "  </metadata>",
     `  <wpt lat="${storm.stormLat}" lon="${storm.stormLon}">`,
     currentTime ? `    <time>${xml(currentTime)}</time>` : null,
-    `    <name>${xml(`${storm.name || "Storm"} NOW`)}</name>`,
+    `    <name>${xml(`${storm.name || "Storm"} START`)}</name>`,
     `    <desc>${xml(currentDescription)}</desc>`,
     storm.forecastAdvisoryUrl ? `    <link href="${xml(storm.forecastAdvisoryUrl)}"><text>NOAA Forecast Advisory</text></link>` : null,
-    "    <sym>circle</sym>",
+    `    <sym>${startSymbol(storm)}</sym>`,
     "    <type>WPT</type>",
     "  </wpt>"
   ].filter(Boolean);

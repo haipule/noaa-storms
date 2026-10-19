@@ -78,6 +78,8 @@ test("builds GPX 1.1 with a forecast track and informative waypoints", () => {
   assert.match(gpx, /<gpx version="1\.1"/);
   assert.match(gpx, /<trk>/);
   assert.match(gpx, /<name>Lala &amp; Test - NOAA forecast, advisory 004<\/name>/);
+  assert.match(gpx, /<name>Lala &amp; Test START<\/name>/);
+  assert.match(gpx, /<sym>circle<\/sym>/);
   assert.match(gpx, /<name>Lala &amp; Test 31 0600Z<\/name>/);
   assert.match(gpx, /Maximum wind: 60 kn/);
   assert.match(gpx, /Gusts: 75 kn/);
@@ -85,6 +87,14 @@ test("builds GPX 1.1 with a forecast track and informative waypoints", () => {
   assert.match(gpx, /Not for navigation/);
   assert.equal((gpx.match(/<trkpt /g) || []).length, 3);
   assert.equal((gpx.match(/<wpt /g) || []).length, 3);
+});
+
+test("uses the OpenCPN hurricane symbol for the start position", () => {
+  const northern = buildGpx(storm({ category: "HU", stormLat: 20.4 }), []);
+  const southern = buildGpx(storm({ category: "HU", stormLat: -20.4 }), []);
+
+  assert.match(northern, /<sym>Weather-Hurricane-NH<\/sym>/);
+  assert.match(southern, /<sym>Weather-Hurricane-SH<\/sym>/);
 });
 
 test("uses only safe NOAA storm IDs in managed filenames", () => {
