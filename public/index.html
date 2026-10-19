@@ -157,6 +157,16 @@
       box-shadow: 0 6px 18px rgba(0,0,0,0.22);
     }
 
+    .config-review-banner {
+      margin: 0 0 1rem;
+      padding: 0.9rem 1rem;
+      border-radius: 14px;
+      border: 2px solid var(--warn);
+      background: rgba(217,119,6,0.18);
+      color: #fed7aa;
+      font-weight: 700;
+    }
+
     .storms {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -221,6 +231,28 @@
     .storm-item .k { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.15rem; }
     .storm-item .v { font-weight: 600; word-break: break-word; }
 
+    .config-link {
+      color: #93c5fd;
+      text-decoration: none;
+    }
+
+    .config-link:hover { text-decoration: underline; }
+
+    .gpx-status-link {
+      display: block;
+      color: inherit;
+      text-decoration: none;
+      border-radius: 8px;
+      padding: 0.55rem;
+      margin: -0.55rem;
+    }
+
+    .gpx-status-link:hover,
+    .gpx-status-link:focus-visible {
+      background: rgba(37,99,235,0.16);
+      outline: none;
+    }
+
     .empty { color: var(--muted); }
 
     @media (max-width: 640px) {
@@ -242,7 +274,12 @@
     </div>
 
     <div id="testdata-banner" class="testdata-banner" hidden>
-      ⚠ TESTDATEN AKTIV — Anzeige basiert nicht auf NOAA-Livedaten
+      ⚠ TEST DATA ACTIVE — Display is not based on live NOAA data
+    </div>
+
+    <div id="notification-review-banner" class="config-review-banner" hidden>
+      Signal K notifications are disabled. Review and save your notification
+      preference in <a class="config-link" href="/#/apps/configuration/noaa-storms" target="_top">NOAA Storms configuration</a>.
     </div>
 
     <div class="top-grid">
@@ -273,14 +310,19 @@
     </div>
 
     <section class="card">
-      <h2>Configured thresholds</h2>
+      <h2>Configuration</h2>
       <div class="kv">
         <div><span class="label">Poll normal</span><span class="value" id="cfg-pollNormalMin">-</span></div>
         <div><span class="label">Poll warning</span><span class="value" id="cfg-pollWarningMin">-</span></div>
         <div><span class="label">Poll alarm</span><span class="value" id="cfg-pollAlarmMin">-</span></div>
         <div><span class="label">Warning threshold</span><span class="value" id="cfg-warnNm">-</span></div>
         <div><span class="label">Alarm threshold</span><span class="value" id="cfg-alarmNm">-</span></div>
+        <div><span class="label">Signal K notifications</span><span class="value" id="cfg-notificationsEnabled">-</span></div>
+        <div><span class="label">Record GPX files</span><span class="value" id="cfg-recordGpx">-</span></div>
+        <div><span class="label">GPX output directory configured</span><span class="value" id="cfg-gpxOutputDirectoryConfigured">-</span></div>
+        <div><span class="label">Delete inactive storm GPX files</span><span class="value" id="cfg-deleteInactiveGpx">-</span></div>
       </div>
+      <p class="small"><a class="config-link" href="/#/apps/configuration/noaa-storms" target="_top">Open NOAA Storms configuration</a></p>
     </section>
 
     <section class="card">
@@ -292,7 +334,7 @@
   </div>
 
   <script>
-    const HTML_VERSION = "1.0.5";
+    const HTML_VERSION = "1.1.3";
     const DATA_URL = "/noaa-storms/data";
     const STATUS_URL = "/noaa-storms/status";
     const REFRESH_MS = 30000;
@@ -462,6 +504,23 @@
       setConfigValue("cfg-pollAlarmMin", `${cfg.pollAlarmMin ?? "-"} min`, "tone-alarm");
       setConfigValue("cfg-warnNm", `${cfg.warnNm ?? "-"} nm`, "tone-warn");
       setConfigValue("cfg-alarmNm", `${cfg.alarmNm ?? "-"} nm`, "tone-alarm");
+      setConfigValue(
+        "cfg-notificationsEnabled",
+        formatBool(cfg.notificationsEnabled),
+        cfg.notificationsEnabled ? "tone-ok" : "tone-warn"
+      );
+      byId("notification-review-banner").hidden = cfg.notificationsConfigured === true;
+      setConfigValue("cfg-recordGpx", formatBool(cfg.recordGpx), cfg.recordGpx ? "tone-ok" : "tone-warn");
+      setConfigValue(
+        "cfg-gpxOutputDirectoryConfigured",
+        formatBool(cfg.gpxOutputDirectoryConfigured),
+        cfg.gpxOutputDirectoryConfigured ? "tone-ok" : "tone-warn"
+      );
+      setConfigValue(
+        "cfg-deleteInactiveGpx",
+        formatBool(cfg.deleteInactiveGpx),
+        cfg.deleteInactiveGpx ? "tone-ok" : "tone-warn"
+      );
     }
 
     function setConfigValue(id, text, toneClass) {
@@ -572,6 +631,13 @@ byId("testdata-banner").hidden = mode !== "test";
         const intensity = Number.isFinite(Number(storm.intensity))
           ? `${formatNumber(storm.intensity, 0)} kn`
           : "-";
+        const gpx = storm.gpx || { state: "waiting", message: "GPX status unavailable" };
+        const gpxClass = gpx.state === "written"
+          ? "ok"
+          : (gpx.state === "error" ? "alarm" : "warn");
+        const gpxDetail = gpx.filename
+          ? `${gpx.message}: ${gpx.filename}`
+          : gpx.message;
         const distanceStatusHtml = distanceReliable
           ? ""
           : `
@@ -630,6 +696,22 @@ byId("testdata-banner").hidden = mode !== "test";
 
 ${distanceStatusHtml}
               </div>
+            </div>
+
+            <div class="storm-section">
+              <a class="gpx-status-link" href="/#/apps/configuration/noaa-storms" target="_top" title="Open NOAA Storms configuration">
+                <div class="storm-section-title">GPX export · open configuration</div>
+                <div class="storm-grid">
+                  <div class="storm-item">
+                    <div class="k">Status</div>
+                    <div class="v"><span class="pill ${gpxClass}">${esc(gpx.state)}</span></div>
+                  </div>
+                  <div class="storm-item">
+                    <div class="k">File candidate</div>
+                    <div class="v">${esc(gpxDetail || "-")}</div>
+                  </div>
+                </div>
+              </a>
             </div>
           </article>
         `;

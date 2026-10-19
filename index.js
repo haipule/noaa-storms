@@ -2,6 +2,7 @@ module.exports = function (app) {
   const plugin = {};
 
 const packageJson = require("./package.json");
+const { updateGpxFiles } = require("./gpx");
 const PLUGIN_VERSION = packageJson.version;
   const PLUGIN_ID = "noaa-storms";
   const DEFAULT_NOAA_URL = "https://www.nhc.noaa.gov/CurrentStorms.json";
@@ -16,6 +17,7 @@ const PLUGIN_VERSION = packageJson.version;
   let latestBoatPos = null;
   let latest = buildEmptyObject(defaultConfig());
   let routesRegistered = false;
+  let notificationState = "unknown";
   let noaaHttpCache = {
     etag: null,
     lastModified: null,
@@ -43,6 +45,30 @@ const PLUGIN_VERSION = packageJson.version;
           type: "string",
           title: "NOAA URL",
           default: DEFAULT_NOAA_URL
+        },
+        notificationsEnabled: {
+          type: "boolean",
+          title: "Enable Signal K notifications",
+          description: "Publish storm warning and alarm states under notifications.noaaHurricane.nearest.",
+          default: false
+        },
+        recordGpx: {
+          type: "boolean",
+          title: "Record GPX files",
+          description: "Write an OpenCPN-compatible NOAA forecast track for each active storm.",
+          default: false
+        },
+        gpxOutputDirectory: {
+          type: "string",
+          title: "GPX output directory",
+          description: "Directory where NOAA Storms manages its current GPX files.",
+          default: ""
+        },
+        deleteInactiveGpx: {
+          type: "boolean",
+          title: "Delete GPX files when storms are no longer listed",
+          description: "Delete only files recorded in the NOAA Storms manifest after a successful live NOAA update.",
+          default: false
         },
         pollNormalMin: {
           type: "number",
@@ -77,6 +103,11 @@ const PLUGIN_VERSION = packageJson.version;
     return {
       dataMode: "live",
       noaaUrl: DEFAULT_NOAA_URL,
+      notificationsEnabled: false,
+      notificationsConfigured: false,
+      recordGpx: false,
+      gpxOutputDirectory: "",
+      deleteInactiveGpx: false,
       pollNormalMin: 720,
       pollWarningMin: 60,
       pollAlarmMin: 15,
@@ -93,6 +124,16 @@ const PLUGIN_VERSION = packageJson.version;
       noaaUrl: typeof options?.noaaUrl === "string" && options.noaaUrl.trim()
         ? options.noaaUrl.trim()
         : d.noaaUrl,
+      notificationsEnabled: options?.notificationsEnabled === true,
+      notificationsConfigured: Object.prototype.hasOwnProperty.call(
+        options || {},
+        "notificationsEnabled"
+      ),
+      recordGpx: options?.recordGpx === true,
+      gpxOutputDirectory: typeof options?.gpxOutputDirectory === "string"
+        ? options.gpxOutputDirectory.trim()
+        : "",
+      deleteInactiveGpx: options?.deleteInactiveGpx === true,
       pollNormalMin: Number(options?.pollNormalMin),
       pollWarningMin: Number(options?.pollWarningMin),
       pollAlarmMin: Number(options?.pollAlarmMin),
@@ -112,6 +153,14 @@ const PLUGIN_VERSION = packageJson.version;
     }
 
     return cfg;
+  }
+
+  function displayConfig(cfg) {
+    const { gpxOutputDirectory, ...display } = cfg;
+    return {
+      ...display,
+      gpxOutputDirectoryConfigured: Boolean(gpxOutputDirectory)
+    };
   }
 
   function getConfig() {
@@ -140,7 +189,7 @@ const PLUGIN_VERSION = packageJson.version;
         plugin: PLUGIN_VERSION,
         html: null
       },
-      config: cfg,
+      config: displayConfig(cfg),
       runtime: {
         state: "normal",
         message: "No active storm",
@@ -525,14 +574,19 @@ function normalizeBoatPosition(raw) {
       }
 
       storms.push({
+        id: toTextOrNull(s.id),
         name: s.name || "unknown",
         category: s.classification || s.category || "",
         stormLat,
         stormLon,
         intensity: toNumberOrNull(s.intensity),
+        pressure: toNumberOrNull(s.pressure),
         movementDir: toNumberOrNull(s.movementDir),
         movementSpeed: toNumberOrNull(s.movementSpeed),
-        lastUpdate: toTextOrNull(s.lastUpdate)
+        lastUpdate: toTextOrNull(s.lastUpdate),
+        advisoryNumber: toTextOrNull(s.forecastAdvisory?.advNum),
+        advisoryIssuance: toTextOrNull(s.forecastAdvisory?.issuance),
+        forecastAdvisoryUrl: toTextOrNull(s.forecastAdvisory?.url)
       });
     }
 
@@ -564,6 +618,7 @@ function normalizeBoatPosition(raw) {
       invalid: [],
       storms: [
         {
+          id: "test-hurricane",
           name: "TEST-HURRICANE",
           category: "HU",
           stormLat: hurricanePos.lat,
@@ -574,6 +629,7 @@ function normalizeBoatPosition(raw) {
           lastUpdate: now
         },
         {
+          id: "test-storm",
           name: "TEST-STORM",
           category: "TS",
           stormLat: stormPos.lat,
@@ -584,6 +640,7 @@ function normalizeBoatPosition(raw) {
           lastUpdate: now
         },
         {
+          id: "test-depression",
           name: "TEST-DEPRESSION",
           category: "TD",
           stormLat: depressionPos.lat,
@@ -703,7 +760,7 @@ function normalizeBoatPosition(raw) {
 
     return {
       ...base,
-      config: cfg,
+      config: displayConfig(cfg),
       runtime: {
         ...(base.runtime || {}),
         ...runtimeState,
@@ -750,53 +807,71 @@ function normalizeBoatPosition(raw) {
     const storms = Array.isArray(obj?.data?.storms) ? obj.data.storms : [];
     const cfg = obj?.config || getConfig();
 
-    let notif;
+    const publishNotification = (value) => {
+      app.handleMessage(plugin.id, {
+        updates: [
+          {
+            values: [
+              {
+                path: "notifications.noaaHurricane.nearest",
+                value
+              }
+            ]
+          }
+        ]
+      });
+    };
 
-    if (!storms.length) {
-      notif = {
-        state: "normal",
-        message: "No storm warnings",
-        method: ["visual", "sound"]
-      };
-    } else {
-      const s = storms[0];
-      const dist = Number(s.distanceNm);
+    const clearNotification = () => {
+      if (notificationState === "clear") return;
+      publishNotification(null);
+      notificationState = "clear";
+    };
 
-      if (!isReliableDistance(s)) {
-        notif = {
-          state: "normal",
-          message: s.distanceBlockedReason
-            ? `Storm present, distance pending: ${s.distanceBlockedReason}`
-            : "Storm present, waiting for valid boat position",
-          method: ["visual"]
-        };
-      } else {
-        let state = "normal";
-        if (dist <= cfg.alarmNm) state = "alarm";
-        else if (dist <= cfg.warnNm) state = "warn";
-
-        notif = {
-          state,
-          message: state === "normal"
-            ? "No storm warnings"
-            : `${s.name || "unknown"} ${s.category || "Storm"} in ${dist.toFixed(1)} nm`,
-          method: ["visual", "sound"]
-        };
-      }
+    if (!cfg.notificationsEnabled) {
+      clearNotification();
+      return;
     }
 
-    app.handleMessage(plugin.id, {
-      updates: [
-        {
-          values: [
-            {
-              path: "notifications.noaaHurricane.nearest",
-              value: notif
-            }
-          ]
-        }
-      ]
+    if (!storms.length) {
+      clearNotification();
+      return;
+    }
+
+    const s = storms[0];
+    const dist = Number(s.distanceNm);
+
+    if (!isReliableDistance(s)) {
+      if (notificationState !== "warn" && notificationState !== "alarm") {
+        clearNotification();
+        return;
+      }
+
+      publishNotification({
+        state: notificationState,
+        message: s.distanceBlockedReason
+          ? `${s.name || "Storm"}: distance unavailable (${s.distanceBlockedReason})`
+          : `${s.name || "Storm"}: waiting for a valid boat position`,
+        method: ["visual"]
+      });
+      return;
+    }
+
+    let state = "normal";
+    if (dist <= cfg.alarmNm) state = "alarm";
+    else if (dist <= cfg.warnNm) state = "warn";
+
+    if (state === "normal") {
+      clearNotification();
+      return;
+    }
+
+    publishNotification({
+      state,
+      message: `${s.name || "unknown"} ${s.category || "Storm"} in ${dist.toFixed(1)} nm`,
+      method: ["visual", "sound"]
     });
+    notificationState = state;
   }
 
   function clearTimer() {
@@ -869,6 +944,37 @@ function normalizeBoatPosition(raw) {
     return raw;
   }
 
+  async function addGpxStatus(storms, raw, cfg) {
+    const listedStormIds = Array.isArray(raw?.activeStorms)
+      ? raw.activeStorms.map((storm) => storm?.id).filter(Boolean)
+      : [];
+
+    try {
+      const statuses = await updateGpxFiles({
+        storms,
+        listedStormIds,
+        config: {
+          ...cfg,
+          userAgent: `${PLUGIN_ID}/${PLUGIN_VERSION}`
+        }
+      });
+      return storms.map((storm) => ({
+        ...storm,
+        gpx: statuses.get(storm.id) || {
+          state: "waiting",
+          message: "GPX status unavailable"
+        }
+      }));
+    } catch (error) {
+      const message = error?.message || String(error);
+      debug(`NOAA: GPX export failed: ${message}`);
+      return storms.map((storm) => ({
+        ...storm,
+        gpx: { state: "error", message }
+      }));
+    }
+  }
+
   async function runCycle(reason) {
     if (stopped) return;
 
@@ -882,15 +988,20 @@ function normalizeBoatPosition(raw) {
       app.setPluginStatus(`Polling ${cfg.dataMode} (${reason})`);
 
       let normalizedData;
+      let raw = null;
 
       if (cfg.dataMode === "test") {
         normalizedData = buildRelativeTestData(cfg, boat);
       } else {
-        const raw = await fetchNoaaJson(cfg);
+        raw = await fetchNoaaJson(cfg);
+        if (!Array.isArray(raw?.activeStorms)) {
+          throw new Error("NOAA response does not contain an activeStorms array");
+        }
         normalizedData = normalizeStorms(raw, cfg);
       }
 
-      const storms = enrichStorms(normalizedData, boat, cfg);
+      const enrichedStorms = enrichStorms(normalizedData, boat, cfg);
+      const storms = await addGpxStatus(enrichedStorms, raw, cfg);
       const runtime = buildRuntime(storms, cfg, latest?.runtime);
 
       const obj = {
@@ -898,7 +1009,7 @@ function normalizeBoatPosition(raw) {
           plugin: PLUGIN_VERSION,
           html: null
         },
-        config: cfg,
+        config: displayConfig(cfg),
         runtime: {
           ...runtime,
           httpCache: cfg.dataMode === "live"
@@ -972,7 +1083,7 @@ app.get("/noaa-storms/status", (req, res) => {
     pluginId: plugin.id,
     pluginName: plugin.name,
     pluginVersion: plugin.version,
-    config: getConfig(),
+    config: displayConfig(getConfig()),
     runtime: latest?.runtime || null
   });
 });
@@ -990,7 +1101,7 @@ app.get("/noaa-storms/data", (req, res) => {
         pluginId: plugin.id,
         pluginName: plugin.name,
         pluginVersion: plugin.version,
-        config: getConfig(),
+        config: displayConfig(getConfig()),
         runtime: latest?.runtime || null
       });
     });
@@ -1008,6 +1119,7 @@ app.get("/plugins/noaa-storms/data", (req, res) => {
     plugin.options = options || {};
     unsubscribes = [];
     latestBoatPos = null;
+    notificationState = "unknown";
     noaaHttpCache = {
       etag: null,
       lastModified: null,
@@ -1020,6 +1132,22 @@ app.get("/plugins/noaa-storms/data", (req, res) => {
     latest = buildEmptyObject(cfg);
     publishToSignalK(latest);
 
+    if (!cfg.notificationsEnabled) {
+      app.handleMessage(plugin.id, {
+        updates: [
+          {
+            values: [
+              {
+                path: "notifications.noaaHurricane.nearest",
+                value: null
+              }
+            ]
+          }
+        ]
+      });
+      notificationState = "clear";
+    }
+
     registerRoutesOnce();
     startBoatSubscription();
 setTimeout(() => {
@@ -1030,6 +1158,22 @@ setTimeout(() => {
   plugin.stop = function () {
     stopped = true;
     clearTimer();
+
+    if (notificationState === "warn" || notificationState === "alarm") {
+      app.handleMessage(plugin.id, {
+        updates: [
+          {
+            values: [
+              {
+                path: "notifications.noaaHurricane.nearest",
+                value: null
+              }
+            ]
+          }
+        ]
+      });
+      notificationState = "clear";
+    }
 
     unsubscribes.forEach((fn) => {
       try {
